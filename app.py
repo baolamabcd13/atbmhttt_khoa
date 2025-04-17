@@ -101,5 +101,11 @@ def dashboard():
     user = User.query.get(session['user_id'])
     return render_template('dashboard.html', username=user.username)
 
+@app.route('/reset-captcha')
+def reset_captcha():
+    captcha_text, captcha_image = generate_captcha()
+    session['captcha_text'] = captcha_text
+    return {'captcha_image': captcha_image}
+
 if __name__ == '__main__':
     app.run(debug=True)

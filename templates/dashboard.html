@@ -1,7 +1,10 @@
 {% extends "base.html" %} {% block content %}
 <div class="container">
   <h2>Welcome, {{ username }}!</h2>
-  <p>This is your dashboard.</p>
-  <a href="{{ url_for('login') }}" class="logout-btn">Logout</a>
+  <div class="dashboard-content">
+    <p>You have successfully logged in to your account.</p>
+    <p>This is your secure dashboard area.</p>
+  </div>
+  <a href="{{ url_for('login') }}" class="logout-btn">Sign Out</a>
 </div>
 {% endblock %}

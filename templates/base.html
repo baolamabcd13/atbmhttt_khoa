@@ -3,16 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Authentication System</title>
+    <title>Secure Authentication System</title>
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/style.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"
     />
   </head>
   <body>
     {% with messages = get_flashed_messages() %} {% if messages %} {% for
     message in messages %}
-    <div class="alert">{{ message }}</div>
+    <div class="alert">
+      <i class="fas fa-exclamation-circle"></i>
+      {{ message }}
+    </div>
     {% endfor %} {% endif %} {% endwith %} {% block content %}{% endblock %}
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
