@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
-from database import db, User
+from database import db, User, LoginAttempt, BlockedIP, SecurityEvent
 import pyotp
 import qrcode
 from io import BytesIO
@@ -12,6 +12,7 @@ import re
 from functools import wraps
 import time
 from datetime import datetime, timedelta
+from sqlalchemy import func, distinct
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'  # Thay đổi thành một key bảo mật
@@ -144,45 +145,106 @@ def register():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == 'GET':
-        captcha_text, captcha_image = generate_captcha()
-        session['captcha_text'] = captcha_text
-        return render_template('login.html', captcha_image=captcha_image)
-    
     if request.method == 'POST':
-        if not check_rate_limit(request.remote_addr):
-            flash('Too many login attempts. Please try again later.')
-            return redirect(url_for('login'))
-        
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '')
-        captcha = request.form.get('captcha', '')
-        totp_code = request.form.get('totp_code', '')
-        
-        # Kiểm tra captcha
-        if captcha.upper() != session.get('captcha_text', ''):
-            flash('Invalid CAPTCHA!')
-            return redirect(url_for('login'))
-        
-        # Xóa captcha cũ
-        session.pop('captcha_text', None)
-        
+        username = request.form.get('username')
+        password = request.form.get('password')
+        captcha = request.form.get('captcha')
+        totp_code = request.form.get('totp_code')
+        ip_address = request.remote_addr
+
         user = User.query.filter_by(username=username).first()
-        if user and check_password_hash(user.password, password):
-            # Kiểm tra mã 2FA
-            totp = pyotp.TOTP(user.totp_secret)
-            if totp.verify(totp_code):
-                session.clear()
-                session['user_id'] = user.id
-                session['username'] = user.username
-                session.permanent = True  # Sử dụng permanent session
-                return redirect(url_for('dashboard'))
-            else:
-                flash('Invalid authentication code!')
-        else:
-            flash('Invalid username or password!')
         
-        return redirect(url_for('login'))
+        try:
+            # Log CAPTCHA attempt
+            if captcha != session.get('captcha_text'):
+                if user:
+                    log_login_attempt(
+                        user_id=user.id,
+                        ip_address=ip_address,
+                        success=False,
+                        attempt_type='captcha'
+                    )
+                log_security_event(
+                    'warning',
+                    'CAPTCHA verification failed',
+                    ip_address,
+                    user.id if user else None
+                )
+                flash('Invalid CAPTCHA!')
+                return redirect(url_for('login'))
+
+            # Log CAPTCHA success
+            if user:
+                log_login_attempt(
+                    user_id=user.id,
+                    ip_address=ip_address,
+                    success=True,
+                    attempt_type='captcha'
+                )
+
+            if user and check_password_hash(user.password, password):
+                totp = pyotp.TOTP(user.totp_secret)
+                if totp.verify(totp_code):
+                    # Log successful login
+                    log_login_attempt(
+                        user_id=user.id,
+                        ip_address=ip_address,
+                        success=True
+                    )
+                    log_security_event(
+                        'success',
+                        'Successful 2FA verification',
+                        ip_address,
+                        user.id
+                    )
+                    
+                    session['user_id'] = user.id
+                    user.last_login = datetime.utcnow()
+                    db.session.commit()
+                    
+                    return redirect(url_for('dashboard'))
+                else:
+                    # Log failed 2FA
+                    log_login_attempt(
+                        user_id=user.id,
+                        ip_address=ip_address,
+                        success=False,
+                        attempt_type='2fa'
+                    )
+                    log_security_event(
+                        'danger',
+                        'Failed 2FA verification',
+                        ip_address,
+                        user.id
+                    )
+                    flash('Invalid 2FA code!')
+            else:
+                # Log failed login
+                if user:
+                    log_login_attempt(
+                        user_id=user.id,
+                        ip_address=ip_address,
+                        success=False,
+                        is_suspicious=True
+                    )
+                log_security_event(
+                    'warning',
+                    'Failed login attempt from suspicious IP',
+                    ip_address
+                )
+                flash('Invalid username or password!')
+            
+            return redirect(url_for('login'))
+        
+        except Exception as e:
+            db.session.rollback()
+            flash('An error occurred. Please try again.')
+            return redirect(url_for('login'))
+
+    # GET request
+    captcha_text, captcha_image = generate_captcha()
+    session['captcha_text'] = captcha_text
+    return render_template('login.html', captcha_image=captcha_image)
 
 @app.route('/dashboard')
 @login_required
@@ -193,27 +255,36 @@ def dashboard():
         flash('Please login again.')
         return redirect(url_for('login'))
 
-    # Lấy thông tin cho dashboard
+    # Tạo dữ liệu cho biểu đồ
     current_time = datetime.utcnow()
-    
-    # Demo data cho biểu đồ
     chart_labels = [(current_time - timedelta(hours=x)).strftime('%H:00') 
-                   for x in range(24, -1, -1)]
-    chart_data = generate_demo_data(24)  # Hàm tạo demo data
+                   for x in range(23, -1, -1)]
+    
+    # Lấy dữ liệu login attempts theo giờ
+    chart_data = []
+    for hour in range(23, -1, -1):
+        time_from = current_time - timedelta(hours=hour+1)
+        time_to = current_time - timedelta(hours=hour)
+        attempts = LoginAttempt.query.filter(
+            LoginAttempt.timestamp.between(time_from, time_to)
+        ).count()
+        chart_data.append(attempts)
 
+    successful, failed, blocked = get_login_stats()
+    
     context = {
         'username': user.username,
         'last_login': user.last_login.strftime('%Y-%m-%d %H:%M:%S') if user.last_login else 'First Login',
         'ip_address': request.remote_addr,
-        'successful_attempts': get_successful_attempts(),
-        'failed_attempts': get_failed_attempts(),
-        'blocked_ips': len(get_blocked_ips()),
+        'successful_attempts': successful,
+        'failed_attempts': failed,
+        'blocked_ips': blocked,
         'security_events': get_recent_security_events(),
-        'captcha_success_rate': calculate_captcha_success_rate(),
+        'captcha_success_rate': get_captcha_success_rate(),
         'rate_limit_blocks': get_rate_limit_blocks(),
-        'suspicious_ips': len(get_suspicious_ips()),
-        'chart_labels': chart_labels,
-        'chart_data': chart_data
+        'suspicious_ips': get_suspicious_ips_count(),
+        'chart_labels': chart_labels,  # Thêm labels cho biểu đồ
+        'chart_data': chart_data      # Thêm data cho biểu đồ
     }
 
     return render_template('dashboard.html', **context)
@@ -235,31 +306,20 @@ def get_blocked_ips():
     """Get list of blocked IPs"""
     return [f"192.168.1.{x}" for x in range(random.randint(1, 10))]
 
-def get_recent_security_events():
-    """Get recent security events"""
-    events = [
-        {
-            'timestamp': (datetime.utcnow() - timedelta(minutes=random.randint(1, 60))).strftime('%H:%M:%S'),
-            'type': random.choice(['warning', 'danger', 'success']),
-            'description': random.choice([
-                'Failed login attempt from suspicious IP',
-                'Successful login from new device',
-                'Rate limit exceeded for IP',
-                'CAPTCHA verification failed',
-                'Successful 2FA verification',
-                'Multiple failed attempts detected'
-            ])
-        } for _ in range(10)
-    ]
-    return sorted(events, key=lambda x: x['timestamp'], reverse=True)
+def get_recent_security_events(limit=5):
+    events = SecurityEvent.query.order_by(
+        SecurityEvent.timestamp.desc()
+    ).limit(limit).all()
+    return events or []  # Trả về list rỗng nếu không có events
 
 def calculate_captcha_success_rate():
     """Calculate CAPTCHA success rate"""
     return random.randint(60, 95)
 
 def get_rate_limit_blocks():
-    """Get number of rate limit blocks"""
-    return random.randint(20, 100)
+    return BlockedIP.query.filter(
+        BlockedIP.reason == 'rate_limit'
+    ).count() or 0
 
 def get_suspicious_ips():
     """Get list of suspicious IPs"""
@@ -331,6 +391,72 @@ def not_found_error(error):
 def internal_error(error):
     db.session.rollback()
     return render_template('error.html', error='500 - Internal Server Error'), 500
+
+def log_login_attempt(user_id, ip_address, success, attempt_type='login', is_suspicious=False):
+    attempt = LoginAttempt(
+        user_id=user_id,
+        ip_address=ip_address,
+        success=success,
+        attempt_type=attempt_type,
+        is_suspicious=is_suspicious
+    )
+    db.session.add(attempt)
+    db.session.commit()
+
+def log_security_event(event_type, description, ip_address, user_id=None):
+    event = SecurityEvent(
+        event_type=event_type,
+        description=description,
+        ip_address=ip_address,
+        user_id=user_id
+    )
+    db.session.add(event)
+    db.session.commit()
+
+def get_login_stats(hours=24):
+    since = datetime.utcnow() - timedelta(hours=hours)
+    
+    # Successful attempts
+    successful = LoginAttempt.query.filter(
+        LoginAttempt.timestamp >= since,
+        LoginAttempt.success == True
+    ).count() or 0
+    
+    # Failed attempts
+    failed = LoginAttempt.query.filter(
+        LoginAttempt.timestamp >= since,
+        LoginAttempt.success == False
+    ).count() or 0
+    
+    # Blocked IPs
+    blocked = BlockedIP.query.filter(
+        BlockedIP.blocked_at >= since
+    ).count() or 0
+    
+    return successful, failed, blocked
+
+def get_captcha_success_rate(hours=24):
+    since = datetime.utcnow() - timedelta(hours=hours)
+    total = LoginAttempt.query.filter(
+        LoginAttempt.timestamp >= since,
+        LoginAttempt.attempt_type == 'captcha'
+    ).count()
+    
+    if total == 0:
+        return 100
+    
+    successful = LoginAttempt.query.filter(
+        LoginAttempt.timestamp >= since,
+        LoginAttempt.attempt_type == 'captcha',
+        LoginAttempt.success == True
+    ).count()
+    
+    return int((successful / total) * 100)
+
+def get_suspicious_ips_count():
+    return db.session.query(func.count(distinct(LoginAttempt.ip_address))).filter(
+        LoginAttempt.is_suspicious == True
+    ).scalar() or 0
 
 if __name__ == '__main__':
     app.run(debug=True)
