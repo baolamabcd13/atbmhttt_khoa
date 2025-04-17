@@ -1,14 +1,41 @@
 {% extends "base.html" %} {% block content %}
 <div class="container">
-  {% if registration_complete %}
+  {% with messages = get_flashed_messages() %} {% if messages %} {% for message
+  in messages %}
+  <div
+    class="alert {% if 'success' in message.lower() %}alert-success{% else %}alert-danger{% endif %}"
+  >
+    {{ message }}
+  </div>
+  {% endfor %} {% endif %} {% endwith %} {% if registration_complete %}
   <h2>Almost Done!</h2>
   <div class="qr-container">
-    <p>Scan this QR code with your authenticator app:</p>
+    <p>Please scan this QR code with your authenticator app:</p>
     <img src="data:image/png;base64,{{ qr_image }}" alt="QR Code" />
-    <p class="info-text">
-      You will be redirected to login page in
-      <span id="countdown">10</span> seconds...
-    </p>
+    <div class="verification-section">
+      <p>
+        After scanning, please enter the code from your authenticator app to
+        verify:
+      </p>
+      <form id="verifyForm" method="POST" action="{{ url_for('verify_2fa') }}">
+        <div class="form-group">
+          <input
+            type="text"
+            id="verification_code"
+            name="verification_code"
+            required
+            placeholder="Enter 6-digit code"
+            pattern="[0-9]{6}"
+            maxlength="6"
+            autocomplete="off"
+          />
+          <input type="hidden" name="username" value="{{ username }}" />
+        </div>
+        <button type="submit" class="verify-btn">
+          Verify & Continue to Login
+        </button>
+      </form>
+    </div>
   </div>
   {% else %}
   <h2>Create Account</h2>
@@ -65,23 +92,6 @@
   </p>
   {% endif %}
 </div>
-
-{% if registration_complete %}
-<script>
-  let timeLeft = 10;
-  const countdownElement = document.getElementById("countdown");
-
-  const countdown = setInterval(() => {
-    timeLeft--;
-    countdownElement.textContent = timeLeft;
-
-    if (timeLeft <= 0) {
-      clearInterval(countdown);
-      window.location.href = "{{ url_for('login') }}";
-    }
-  }, 1000);
-</script>
-{% endif %}
 
 <script>
   // Real-time password validation

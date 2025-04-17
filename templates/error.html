@@ -1,0 +1,12 @@
+{% extends "base.html" %} {% block content %}
+<div class="container">
+  <div class="error-container">
+    <h2>{{ error }}</h2>
+    <p>
+      Something went wrong. Please try again or contact support if the problem
+      persists.
+    </p>
+    <a href="{{ url_for('home') }}" class="btn">Return to Home</a>
+  </div>
+</div>
+{% endblock %}

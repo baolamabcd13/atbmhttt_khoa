@@ -1,10 +1,127 @@
 {% extends "base.html" %} {% block content %}
 <div class="container">
-  <h2>Welcome, {{ username }}!</h2>
-  <div class="dashboard-content">
-    <p>You have successfully logged in to your account.</p>
-    <p>This is your secure dashboard area.</p>
+  <div class="dashboard-header">
+    <h2>Security Dashboard</h2>
+    <div class="user-info">
+      <span>Welcome, {{ username }}</span>
+      <a href="{{ url_for('logout') }}" class="logout-btn">Sign Out</a>
+    </div>
   </div>
-  <a href="{{ url_for('login') }}" class="logout-btn">Sign Out</a>
+
+  <div class="dashboard-grid">
+    <!-- Security Status Panel -->
+    <div class="dashboard-card">
+      <h3>Security Status</h3>
+      <div class="status-items">
+        <div class="status-item">
+          <span class="status-label">2FA Status</span>
+          <span class="status-badge active">Enabled</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Last Login</span>
+          <span>{{ last_login }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">IP Address</span>
+          <span>{{ ip_address }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Login Attempts Monitor -->
+    <div class="dashboard-card">
+      <h3>Login Attempts (Last 24h)</h3>
+      <div class="chart-container">
+        <canvas id="loginAttemptsChart"></canvas>
+      </div>
+      <div class="attempts-summary">
+        <div class="attempt-stat">
+          <span>Successful</span>
+          <strong class="success">{{ successful_attempts }}</strong>
+        </div>
+        <div class="attempt-stat">
+          <span>Failed</span>
+          <strong class="failed">{{ failed_attempts }}</strong>
+        </div>
+        <div class="attempt-stat">
+          <span>Blocked IPs</span>
+          <strong class="blocked">{{ blocked_ips }}</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="dashboard-card">
+      <h3>Recent Security Events</h3>
+      <div class="activity-list">
+        {% for event in security_events %}
+        <div class="activity-item {{ event.type }}">
+          <span class="event-time">{{ event.timestamp }}</span>
+          <span class="event-type">{{ event.type }}</span>
+          <span class="event-description">{{ event.description }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Brute Force Protection Stats -->
+    <div class="dashboard-card">
+      <h3>Brute Force Protection</h3>
+      <div class="protection-stats">
+        <div class="stat-item">
+          <span class="stat-label">CAPTCHA Success Rate</span>
+          <div class="progress-bar">
+            <div class="progress progress-{{ captcha_success_rate }}"></div>
+          </div>
+          <span class="stat-value">{{ captcha_success_rate }}%</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Rate Limiting Blocks</span>
+          <span class="stat-value">{{ rate_limit_blocks }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Suspicious IPs</span>
+          <span class="stat-value">{{ suspicious_ips }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    const ctx = document.getElementById("loginAttemptsChart").getContext("2d");
+    new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: JSON.parse("{{ chart_labels | tojson | safe }}"),
+        datasets: [
+          {
+            label: "Login Attempts",
+            data: JSON.parse("{{ chart_data | tojson | safe }}"),
+            borderColor: "#4CAF50",
+            tension: 0.1,
+            fill: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            beginAtZero: true,
+          },
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: "top",
+          },
+        },
+      },
+    });
+  });
+</script>
 {% endblock %}

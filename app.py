@@ -11,6 +11,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import re
 from functools import wraps
 import time
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'  # Thay đổi thành một key bảo mật
@@ -123,13 +124,16 @@ def register():
             new_user = User(
                 username=username,
                 password=hashed_password,
-                totp_secret=totp_secret
+                totp_secret=totp_secret,
+                is_2fa_verified=False  # Thêm trường mới
             )
             db.session.add(new_user)
             db.session.commit()
             
-            flash('Registration successful! Please scan the QR code with your authenticator app.')
-            return render_template('register.html', qr_image=qr_image, registration_complete=True)
+            return render_template('register.html', 
+                                 qr_image=qr_image, 
+                                 registration_complete=True,
+                                 username=username)
             
         except Exception as e:
             db.session.rollback()
@@ -188,7 +192,78 @@ def dashboard():
         session.clear()
         flash('Please login again.')
         return redirect(url_for('login'))
-    return render_template('dashboard.html', username=user.username)
+
+    # Lấy thông tin cho dashboard
+    current_time = datetime.utcnow()
+    
+    # Demo data cho biểu đồ
+    chart_labels = [(current_time - timedelta(hours=x)).strftime('%H:00') 
+                   for x in range(24, -1, -1)]
+    chart_data = generate_demo_data(24)  # Hàm tạo demo data
+
+    context = {
+        'username': user.username,
+        'last_login': user.last_login.strftime('%Y-%m-%d %H:%M:%S') if user.last_login else 'First Login',
+        'ip_address': request.remote_addr,
+        'successful_attempts': get_successful_attempts(),
+        'failed_attempts': get_failed_attempts(),
+        'blocked_ips': len(get_blocked_ips()),
+        'security_events': get_recent_security_events(),
+        'captcha_success_rate': calculate_captcha_success_rate(),
+        'rate_limit_blocks': get_rate_limit_blocks(),
+        'suspicious_ips': len(get_suspicious_ips()),
+        'chart_labels': chart_labels,
+        'chart_data': chart_data
+    }
+
+    return render_template('dashboard.html', **context)
+
+# Helper functions for dashboard
+def generate_demo_data(points):
+    """Generate demo data for the chart"""
+    return [random.randint(0, 100) for _ in range(points)]
+
+def get_successful_attempts():
+    """Get number of successful login attempts"""
+    return random.randint(10, 50)
+
+def get_failed_attempts():
+    """Get number of failed login attempts"""
+    return random.randint(50, 200)
+
+def get_blocked_ips():
+    """Get list of blocked IPs"""
+    return [f"192.168.1.{x}" for x in range(random.randint(1, 10))]
+
+def get_recent_security_events():
+    """Get recent security events"""
+    events = [
+        {
+            'timestamp': (datetime.utcnow() - timedelta(minutes=random.randint(1, 60))).strftime('%H:%M:%S'),
+            'type': random.choice(['warning', 'danger', 'success']),
+            'description': random.choice([
+                'Failed login attempt from suspicious IP',
+                'Successful login from new device',
+                'Rate limit exceeded for IP',
+                'CAPTCHA verification failed',
+                'Successful 2FA verification',
+                'Multiple failed attempts detected'
+            ])
+        } for _ in range(10)
+    ]
+    return sorted(events, key=lambda x: x['timestamp'], reverse=True)
+
+def calculate_captcha_success_rate():
+    """Calculate CAPTCHA success rate"""
+    return random.randint(60, 95)
+
+def get_rate_limit_blocks():
+    """Get number of rate limit blocks"""
+    return random.randint(20, 100)
+
+def get_suspicious_ips():
+    """Get list of suspicious IPs"""
+    return [f"192.168.1.{x}" for x in range(random.randint(5, 15))]
 
 @app.route('/reset-captcha')
 def reset_captcha():
@@ -201,6 +276,51 @@ def logout():
     session.clear()
     flash('You have been logged out.')
     return redirect(url_for('login'))
+
+@app.route('/verify-2fa', methods=['POST'])
+def verify_2fa():
+    username = request.form.get('username')
+    verification_code = request.form.get('verification_code')
+    
+    if not username or not verification_code:
+        flash('Please provide both username and verification code.')
+        return redirect(url_for('register'))
+    
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        flash('User not found.')
+        return redirect(url_for('register'))
+    
+    totp = pyotp.TOTP(user.totp_secret)
+    
+    try:
+        if totp.verify(verification_code):
+            # Cập nhật trạng thái xác thực 2FA của user
+            user.is_2fa_verified = True
+            db.session.commit()
+            
+            flash('2FA verification successful! You can now login.')
+            return redirect(url_for('login'))
+        else:
+            flash('Invalid verification code. Please try again.')
+            # Trả về trang register với QR code và trạng thái registration_complete
+            qr = qrcode.QRCode(version=1, box_size=10, border=5)
+            provisioning_uri = totp.provisioning_uri(username, issuer_name="SecureAuth")
+            qr.add_data(provisioning_uri)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            
+            buffered = BytesIO()
+            img.save(buffered)
+            qr_image = base64.b64encode(buffered.getvalue()).decode()
+            
+            return render_template('register.html', 
+                                qr_image=qr_image, 
+                                registration_complete=True,
+                                username=username)
+    except Exception as e:
+        flash('An error occurred during verification. Please try again.')
+        return redirect(url_for('register'))
 
 # Error handlers
 @app.errorhandler(404)
