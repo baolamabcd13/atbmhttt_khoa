@@ -1,0 +1,31 @@
+{% extends "base.html" %} {% block content %}
+<div class="container">
+  {% if registration_complete %}
+  <h2>Scan QR Code</h2>
+  <p>Please scan this QR code with your authenticator app:</p>
+  <img src="data:image/png;base64,{{ qr_image }}" alt="QR Code" />
+  <p>After scanning, you will be redirected to login page in 10 seconds...</p>
+  <script>
+    setTimeout(() => {
+      window.location.href = "{{ url_for('login') }}";
+    }, 10000);
+  </script>
+  {% else %}
+  <h2>Register</h2>
+  <form method="POST">
+    <div class="form-group">
+      <label for="username">Username:</label>
+      <input type="text" id="username" name="username" required />
+    </div>
+    <div class="form-group">
+      <label for="password">Password:</label>
+      <input type="password" id="password" name="password" required />
+    </div>
+    <button type="submit">Register</button>
+  </form>
+  <p>
+    Already have an account? <a href="{{ url_for('login') }}">Login here</a>
+  </p>
+  {% endif %}
+</div>
+{% endblock %}
